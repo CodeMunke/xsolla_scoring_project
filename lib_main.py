@@ -1,12 +1,9 @@
-from google.oauth2 import service_account
 import pandas_gbq
 
 import numpy as np
 import pandas as pd
 import math as mt
 import datetime as dt
-
-from statistics import mean
 
 
 """[summary]
@@ -15,13 +12,13 @@ Funtion for getting fresh data from BigQuery for workload scoring model
 Credentials - google service account object with credentials data for project
 SqlQuery - string, sql query for BigQeury database
 """
-def getFreshData(Credentials,ProjectId):
+def getFreshData(ProjectId):
     bigquery_sql = " ".join(["SELECT id, DATE(CAST(created_at AS DATETIME)) AS created, DATE(CAST(updated_at AS DATETIME)) AS updated, status, assignee_id",
                              "FROM `xsolla_summer_school.customer_support`",
                              "WHERE status IN ('closed','solved')",
                              "ORDER BY updated_at"])
 
-    dataframe = pandas_gbq.read_gbq(bigquery_sql,project_id=ProjectId, credentials=Credentials, dialect="standard")
+    dataframe = pandas_gbq.read_gbq(bigquery_sql,project_id=ProjectId, dialect="standard")
 
     return dataframe
 
@@ -138,26 +135,59 @@ def workloadScoreStatuses(LeftBoard, RightBoard, CurrentNumOfTasks):
     return score
 
 
-def score_employees(employee_df):
+def score_employees(employee_df, NumOfAllDays, NumOfIntervalDays):
+    """
+    Function for scoring all employees by statuses using workloadScoringByStatuses function.
+
+    :param employee_df: DataFrame with incoming data
+
+    :param NumOfAllDays: number of days for all hist data
+    :type NumOfAllDays: int
+
+    :param NumOfIntervalDays: number of days for weekly calculating interval
+    :type NumOfIntervalDays: int
+
+    :returns: DataFrame with all employees scored by statuses.
+    """
     unique_ids = employee_df['assignee_id'].unique()
 
-    temp = employee_df[employee_df.assignee_id == 12604869947][:]
+    temp = employee_df[employee_df.assignee_id == unique_ids[0]][:]
     temp.reset_index(inplace=True, drop=True)
-    temp_status = workloadScoringByStatuses(temp, 63, 7)
+    temp_status = workloadScoringByStatuses(temp, NumOfAllDays, NumOfIntervalDays)
 
     result = temp_status.copy()
     result.drop(result.index, inplace=True)
     for assignee_id in unique_ids:
         user = employee_df[employee_df.assignee_id == assignee_id][:]
         user.reset_index(inplace=True, drop=True)
-        user_status = workloadScoringByStatuses(user, 63, 7)
+        user_status = workloadScoringByStatuses(user, NumOfAllDays, NumOfIntervalDays)
         result = result.append(user_status)
 
     result.reset_index(inplace=True, drop=True)
     return result
 
 
-def unify_employee_scores(user_status_df):
+"""
+[summary]
+Function that unifies all scores of all employees using a given statistic unification method.
+[description]
+user_status_df - DataFrame with incoming data
+NumOfAllDays - integer, number of days for all hist data
+NumOfIntervalDays - integer, number of days for weekly calculating interval
+"""
+
+
+def unify_employee_scores(user_status_df, calc_method):
+    """
+    Function that unifies all scores of all employees using a given statistic unification method.
+
+    :param user_status_df: DataFrame with scored employees
+
+    :param calc_method: callback method used to calculate the unified score for each employee.
+
+    :returns: DataFrame with all employees scored.
+    """
+
     unique_user_ids = user_status_df['assignee_id'].unique()
     assignee_col = []
     score_value_col = []
@@ -165,17 +195,26 @@ def unify_employee_scores(user_status_df):
     for user_id in unique_user_ids:
         user_df = user_status_df[user_status_df.assignee_id == user_id][['assignee_id', 'score_value']]
         score_values = user_df[:]['score_value']
-        mean_score = mean(score_values)
+        calculated_score = calc_method(score_values)
 
         assignee_col.append(user_id)
-        score_value_col.append(mean_score)
+        score_value_col.append(calculated_score)
 
-    #         result.append({'assignee_id': user_id, 'score_value': mean_score})
     result = pd.DataFrame({'assignee_id': assignee_col, 'score_value': score_value_col})
     return result
 
 
 def insert_data_into_gbq(InsertData: pd.DataFrame, ProjectId, DatasetId, TableId):
+    """
+    Function for inserting data to BigQuery database.
+
+    :param InsertData - pandas dtaframe object, with score result data by statuses
+    :param ProjectId - string, name of project in google cloud platform
+    :param DatasetId - string, name of dataset in bigquery for raw data
+    :param TableId - string, name of table for raw data
+
+    :returns: None.
+    """
     destination_table = f"{DatasetId}.{TableId}"
 
     res_df = pd.DataFrame()
